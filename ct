@@ -1,0 +1,404 @@
+#!/bin/ksh
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+#
+# Script:       Chimera-tool
+#
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+
+
+chimerabase=/etc/bb/chimera
+chimerabaseOverride=$HOME/.bbprofile.d
+
+[ ! -d $chimerabase ] && echo "Chimera does not appear to be installed on this machine [$(hostname)].  Exiting." && exit 1
+
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+# available - show all chunks
+available () {
+    echo
+    echo "main:"
+    echo "-----"
+
+    cd $chimerabase
+    for dir in $(ls -l | grep drwxr | awk '{print $NF}')
+    do
+        [ $dir != "include" ] && [ $dir != "chimerabaseline" ] && [ $dir != "data" ] && ls -1 $dir/* 2>/dev/null | grep -v contrib/skel | grep -v "\.md$"
+
+        # highlight chunks already in play
+        #    if [ $dir != "include" ]
+        #    then
+        #        for chunk in $(ls -1 $dir/*)
+        #        do
+        #                [ "$(echo $BBENV | grep $chunk)" ] && echo "$chunk *" || echo $chunk
+        #        done
+        #    fi
+
+    done
+
+    if [ -d $chimerabaseOverride ]
+    then
+        echo
+        echo "override:"
+        echo "---------"
+        cd $chimerabaseOverride
+        for dir in $(ls -l | grep drwxr | awk '{print $NF}')
+        do
+            [ $dir != "include" ] && [ $dir != "chimerabaseline" ] && [ $dir != "data" ] && ls -1 $dir/* 2>/dev/null | grep -v contrib/skel
+
+            # highlight chunks already in play
+            #    if [ $dir != "include" ]
+            #    then
+            #        for chunk in $(ls -1 $dir/*)
+            #        do
+            #                [ "$(echo $BBENV | grep $chunk)" ] && echo "$chunk *" || echo $chunk
+            #        done
+            #    fi
+
+        done
+
+        echo
+    fi
+}
+
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+# current - show chunks that made up the current shell
+current () {
+    echo
+    echo "current:"
+    echo "--------"
+    for chunk in $BBENV
+    do
+        echo $chunk
+    done
+    echo
+}
+
+
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+# flags - show all flags
+flags () {
+    echo
+    echo "The following flags are available for use in your local ~/.bbprofile"
+    echo "check your file to see what's actually being used"
+    echo
+    echo
+    echo "> chimera main"
+    echo " + flag/verbose     : increase general verbosity level"
+    echo " + flag/dumpinfo    : dumps profile information and sends to dev engineering"
+    echo " + flag/aliasexport : dumps aliases to ~/.bbalias for sourcing in subshells"
+    echo " + flag/alwayshome  : if set non-login subshells start in $HOME, else $PWD"
+    echo " - flag/bbbin       : do NOT put /bb/bin in the path"
+    echo
+    echo " === Below two flags affect login shell, if both listed bash is prefered ==="
+    echo
+    echo " + flag/bash        : give user a bash shell instead of ksh"
+    echo " + flag/ksh93       : give user a ksh93 shell instead of ksh"
+    echo " + flag/zsh         : give user a zsh shell instead of ksh"
+    echo " + flag/zsecure     : maintain zsh security (will give warnings due to DPKG)"
+    echo
+    echo "Flags that are recognized by available chunks on this machine"
+    echo "for a description of the effects each has use 'chimera describe chunk/name'"
+    echo
+    #echo cd $chimerabase
+    cd $chimerabase
+    for dir in $(ls -l | grep drwxr | awk '{print $NF}')
+    do
+        # exclude some directories here
+        [ $dir != "include" ] && [ $dir != "chimerabaseline" ] && [ $dir != "data" ] && chunks=$(ls -1 $dir/*) || continue
+        #echo "Chunks in class = $chunks" # test
+        for chunk in $chunks
+        do
+            #echo "Chunk = $chunk" # test
+            [ $chunk = "contrib/skel" ] && continue
+            [ ! "$chunk" ] && continue # no chunks in directory
+
+            flaglines=$(grep "flagcheck" $chunk | grep -v "^#")
+            for flagline in $flaglines
+            do
+                for word in $flagline
+                do
+                    if [ "$flagfound" ]
+                    then
+                        if [ $word != "no" ]
+                        then
+                            unset flagfound
+                            #echo "Flag = $word" # test
+                            if [ "$flagneg" ]
+                            then
+                                unset flagneg
+                                [ ! "$(echo $negflagsinchunk | grep "$word")" ] && negflagsinchunk="$negflagsinchunk $word"
+                                #negflagsinchunk="$negflagsinchunk $word"
+                            else
+                                [ ! "$(echo $flagsinchunk | grep "$word")" ] && flagsinchunk="$flagsinchunk $word"
+                                #flagsinchunk="$flagsinchunk $word"
+                            fi
+                            continue
+                        else
+                            flagneg=true
+                        fi
+                    fi
+                    [ $word = "flagcheck" ] && flagfound=true
+                done
+            done
+            if [ "$flagsinchunk" ] ||  [ "$negflagsinchunk" ]
+            then
+                echo "   > $chunk:"
+                if [ "$flagsinchunk" ]
+                then
+                    for flag in $flagsinchunk
+                    do
+                        echo "      + flag/$flag"
+                    done
+                    unset flagsinchunk
+                fi
+                if [ "$negflagsinchunk" ]
+                then
+                    for flag in $negflagsinchunk
+                    do
+                        echo "      - flag/$flag"
+                    done
+                    unset negflagsinchunk
+
+                fi
+            echo
+            fi
+        done
+    done
+
+    if [ -d $chimerabaseOverride ]
+    then
+        echo
+        echo "override locations are not scanned for flags"
+        echo
+    fi
+}
+
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+# describe - show chunk description
+describe () {
+    if [ "$(echo $1 | grep "include/")" ] || [ "$(echo $1 | grep "chimerabaseline")" ] || [ "$(echo $1 | grep "data/")" ]
+    then
+        # disregard included chunks (no context)
+        exit
+    elif [ $1 = "chimera" ]
+    then
+        # should probably do this like all the rest, just stick it here for the moment
+        echo
+        echo "# Chimera   \"The term chimera has come to describe any mythical or fictional"
+        echo "#            animal with parts taken from various animals.\""
+        echo "#"
+        echo "# Author:   Chris Regenye (Dev Engineering)"
+        echo "# Date:     02/06/2013"
+        echo "#           This is the primary working part of the new development environment"
+        echo "#"
+        echo "# + flag/verbose     : increase general verbosity level"
+        echo "# + flag/dumpinfo    : dumps profile information and sends to dev engineering"
+        echo "# + flag/aliasexport : dumps aliases to ~/.bbalias for sourcing in subshells"
+        echo "# - flag/bbbin       : do NOT put /bb/bin in the path"
+        echo "#"
+        echo "# === Below two flags affect login shell, if both listed bash is prefered ==="
+        echo "#"
+        echo "# + flag/bash        : give user a bash shell instead of ksh"
+        echo "# + flag/ksh93       : give user a ksh93 shell instead of ksh"
+        echo "# + flag/zsh         : give user a zsh shell instead of ksh"
+        echo "# + flag/zsecure     : maintain zsh security (will give warnings due to DPKG)"
+        echo
+        elif [ -f $chimerabaseOverride/$1 ]
+        then
+                echo
+                echo "override:"
+                echo "---------"
+                echo
+                while read descriptionline
+                do
+                        [ "$(echo $descriptionline | grep "=-=-=-")" ] && echo && exit
+                        echo $descriptionline
+                done < $chimerabaseOverride/$1
+
+        elif [ -f $chimerabase/$1 ]
+        then
+                echo
+                echo "main:"
+                echo "-----"
+                echo
+                while read descriptionline
+                do
+                        [ "$(echo $descriptionline | grep "=-=-=-")" ] && echo && exit
+                        echo $descriptionline
+                done < $chimerabase/$1
+        else
+                echo
+                echo " Unable to locate $1 in either primary or override locations"
+                echo
+                exit 1
+        fi
+}
+
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+# show - display entire chunk to user
+show () {
+    [ -f $chimerabase/$1 ] && [ "$1" = "contrib/skel" ] && silent=true
+    if [ -f $chimerabase/$1 ]
+    then
+        echo
+        [ ! "$silent" ] && echo "Override locations are not displayed, showing cannonical $1:"
+        [ ! "$silent" ] && echo
+        #echo "main:"
+        #echo "-----"
+        [ ! "$silent" ] && echo
+        cat $chimerabase/$1 | ${PAGER:-more}
+        echo
+    else
+        echo
+        echo "Unable to locate $1 in primary location"
+        echo "Override locations are not displayed"
+        echo
+        exit 1
+    fi
+}
+
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+# pathfinder - display chunk names that add the specified path to PATH
+pathfinder () {
+     checkfor=$1
+     # input sanitizing
+     [ "$checkfor" = "/" ] && exit
+     #[ "${checkfor: -1}" = "/" ] && checkfor=${checkfor%/}
+     checkfor=${checkfor%/}
+
+     [ "$(echo $checkfor | grep [\:\!\&\<\>\|\`\<\>] 2>/dev/null)" ] && exit
+
+     echo
+     echo "The following chunks add $checkfor to the PATH variable:"
+     echo "override locations are not scanned"
+     echo
+
+     # set up short path
+     if [ $(echo $checkfor | awk -F/ '{print $NF}') = "bin" ]
+     then
+          checkforshort=$(echo $checkfor | awk -F/ 'NF = NF-1 {print}' OFS='/')
+     else
+          checkforshort=$checkfor
+     fi
+
+     # check for special cases
+     case $checkfor in
+          /home/phab/bin)
+               echo "group/general"
+               #exit
+               ;;
+          /home/*/bin|/home/*/usr|/home/*/usr/$PROCTYPE|/home/*/$PROCTYPE)
+               echo "tag/dev"
+               echo
+               exit
+               ;;
+          /bin|/usr/bin|/opt/ssh/bin|/opt/quest/bin|/sbin|/usr/sbin)
+               echo "chimera"
+               echo
+               exit
+               ;;
+          /usr/bin/X11)
+               echo "tag/sparc"
+               echo "tag/ibm"
+               echo "tag/dev"
+               echo "tag/bldo"
+               echo
+               exit
+               ;;
+          /opt/swt/rational/releases/PurifyPlus*|/opt/swt/common/totalview*)
+               echo "tag/dev"
+               echo
+               exit
+               ;;
+          /bb/bin)
+               echo "chimera"
+               ;;
+     esac
+
+     cd /etc/bb/chimera
+
+     # check for pendpath use
+     grep "pendpath" tag/* group/* contrib/* | grep -v ":#" | grep " $checkforshort[:\"]" | cut -d: -f1 | uniq
+     grep "pendpath" tag/* group/* contrib/* | grep -v ":#" | grep " $checkforshort$" | cut -d: -f1 | uniq
+
+     # check for normal use
+     grep PATH= tag/* group/* contrib/* | grep -v ":#" | grep -v ":alias" | grep "[=:\"]$checkfor[:\"]" | cut -d: -f1 | uniq
+     grep PATH= tag/* group/* contrib/* | grep -v ":#" | grep -v ":alias" | grep "[=:\"]$checkfor$" | cut -d: -f1 | uniq
+
+     echo
+}
+
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+# inc_alias - pull aliases out of the chimera include/ directory.  should be
+# named chunk.alias
+inc_alias () {
+        if [ -f $chimerabaseOverride/include/$1.alias ]
+        then
+                . $chimerabaseOverride/include/$1.alias
+                echo ". $chimerabaseOverride/include/$1.alias"
+        elif [ -f $chimerabase/include/$1.alias ]
+        then
+                . $chimerabaseOverride/include/$1.alias
+                ". $chimerabaseOverride/include/$1.alias"
+        fi
+#  inc_alias chunk_name  for use in scripts, sources aliases in chunk_name
+#                        see {TEAM still_to_be_written} for more information.
+#
+
+}
+
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+# quickhelp - display help information
+quickhelp () {
+cat << EOF
+ -----------------------------------------------------------------------------
+  - chimera current : show all chunks that were sourced by the current shell
+  - chimera available : show all chunks available for inclusion/exclusion
+  - chimera flags : scan cannonical chunks for flag toggles and list by chunk
+  - chimera describe foo/bar : display brief description of chunk foo/bar
+  - chimera show foo/bar : display entire contents of chunk foo/bar
+  - chimera pathfinder /path/in/question : show where a path piece came from
+ -----------------------------------------------------------------------------
+EOF
+}
+
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+# usage - display usage information
+usage () {
+cat << EOF
+
+USAGE: chimera function [chunk/name]
+
+FUNCTIONS:
+
+  current               show all chunks that were sourced by the current shell
+  available             show all chunks available for inclusion/exclusion
+  flags                 scan cannonical chunks for flag toggles, list by chunk
+  describe chunk/name   display brief description of chunk/name
+  show chunk/name       display entire contents of chunk/name
+  pathfinder /foo/bar   display chunks that add /foo/bar to the PATH variable
+
+EOF
+}
+
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+#                             --== Main ==--
+
+[ ! "$1" ] && echo && quickhelp && echo && exit
+
+function=$1 #; echo $function
+[ "$2" ] && parameter=$2 #; echo $parameter
+
+case $function in
+        current|currentenv|bbenv)       current
+        ;;
+
+        available|flags)                $function
+        ;;
+
+        inc_alias|describe|show|pathfinder)
+                                        [ ! "$parameter" ] && usage && exit 1
+                                        $function $parameter
+        ;;
+    *) usage && exit 1
+        ;;
+esac
