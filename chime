@@ -1,0 +1,1009 @@
+
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+# vim: set syntax=sh tabstop=4 expandtab:
+#
+# Script:       Chimera
+#           "The term chimera has come to describe any mythical or fictional
+#            animal with parts taken from various animals."
+#
+#
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+chimerabaseOverride=$HOME/.bbprofile.d
+
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+# Chimera Actual override. More easility facilitates testing of changes made
+# to the main body of chimera (message still displays twice on ibm, sigh)
+if [ "$1" = override ]
+then
+     if [ -z "$CHIMERA_SHELLBOUNCE" ]
+     then
+          echo " !! Now running overridden chimera"
+     else
+          unset CHIMERA_SHELLBOUNCE
+     fi
+elif [ -f "$chimerabaseOverride/chimera" ]
+then
+     if [ -z "$CHIMERA_SHELLBOUNCE" ]
+     then
+          echo " -- Found overridden chimera $chimerabaseOverride/chimera"
+     fi
+     . "$chimerabaseOverride/chimera" override
+     return
+fi
+
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+set -o nolog # DRQS 60305235
+errorlog="$HOME/.bbprofile.log"
+aliasfile="$HOME/.bbalias"
+chimerabase=/etc/bb/chimera
+invokehardpath=include/
+showallmsg="List of what currently exists within the chimera environment:"
+RESETPATH="/opt/ssh/bin:/bin:/usr/bin:/sbin:/usr/sbin:/opt/quest/bin"
+MANPATH="/usr/man:/usr/share/man:/opt/quest/man"
+logfile="/home/testadmn/LOGS/chimera/chimera.log"
+logstats=true
+devengmaillist=/home/testadmn/deveng.email.list
+echo $- | grep "i" > /dev/null 2>&1 || cronuse="True"
+if [ -f $devengmaillist ]
+then
+    dumpnotify=$(cat $devengmaillist | awk '{print $1}' | grep -v "#")
+else
+    dumpnotify="vpeterson1@bloomberg.net njohn2@bloomberg.net snicholson6@bloomberg.net ccollier@bloomberg.net rsingh74@bloomberg.net sshahid1@bloomberg.net cregenye@bloomberg.net"
+fi
+
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+# Super common stuff that's branched off of.
+[ ! "$HOSTNAME" ] && HOSTNAME=$(/bin/hostname) && export HOSTNAME
+[ ! "$PROCTYPE" ] && PROCTYPE=$(/bin/uname -p) && export PROCTYPE
+[ ! "$SYSTYPE" ] && SYSTYPE=$(/bin/uname -s) && export SYSTYPE
+[ ! "$OSTYPE" ] && OSTYPE=$SYSTYPE && export OSTYPE
+
+# variable ID below is set to primary group, useful I suppose, don't know if it's used
+# variable ARCHCODE is used when compiling, it's not exported from here but you can branch on it
+case $SYSTYPE in
+    SunOS)
+        ID=$(/usr/xpg4/bin/id -ng); export ID
+            ARCHCODE="sundev1"
+        ;;
+    Linux)
+        ID=$(/usr/bin/id -ng); export ID
+            ARCHCODE="linux"
+        ;;
+    AIX)
+        ID=$(/usr/bin/id -ng); export ID
+            ARCHCODE="ibm"
+        ;;
+esac
+
+# adding this here because it isn't explicitly defined under Linux
+# we can move this to tag/linux if needed but let's try making them all the same
+# per conversation with peter/jeremy
+LANG=C
+export LANG
+
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+# flagcheck and flags
+check_for_flag () {
+    typeset flag to_check=$1
+    shift
+    for flag in "$@"
+    do
+        if [[ "$to_check" = "$flag" ]]
+        then
+            # typeset in ksh on linux doesn't make variables local
+            unset flag to_check
+            return 0
+        fi
+    done
+    unset flag to_check
+    return 1
+}
+
+flagcheck () {
+    case $1 in
+        no)
+            shift
+            check_for_flag $1 "${negiflags[@]}"
+            ;;
+        yes)
+            shift
+            check_for_flag $1 "${posiflags[@]}"
+            ;;
+        *)
+            check_for_flag $1 "${posiflags[@]}"
+            ;;
+    esac
+}
+
+flagclear () {
+    typeset flag=$1 index
+
+     flaglist=$(echo ${posiflags[@]})
+     index=0
+     for flag in $flaglist
+     do
+          if [ "$flag" = "$1" ]
+          then
+               # if we just make this empty as opposed to some value
+               # the index[#] still exists it's value is just blank and it skews
+               # index counter on subsequent runs
+               posiflags[$index]="UNSET"
+          fi
+          let index=$index+1
+     done
+
+     flaglist=$(echo ${negiflags[@]})
+     index=0
+     for flag in $flaglist
+     do
+          if [ "$flag" = "$1" ]
+          then
+               negiflags[$index]="UNSET"
+          fi
+          let index=$index+1
+     done
+
+     flaglist=$(echo ${allflags[@]})
+     index=0
+     for flag in $flaglist
+     do
+          if [ "$flag" = "$1" ]
+          then
+               allflags[$index]="UNSET"
+          fi
+          let index=$index+1
+     done
+
+     unset flag index flaglist
+}
+
+read_bbprofile () {
+    typeset op chunkorflag junk flag
+    while read op chunkorflag junk
+    do
+        if [[ $op != + && $op != - ]]
+        then
+            continue
+        fi
+
+        if [[ $chunkorflag = flag/* ]]
+        then
+            # remove flag/ prefix
+            flag=${chunkorflag#flag/}
+            if [[ -n $flag ]]
+            then
+                if [[ $op = '-' ]]
+                then
+                    allflags[${#allflags[@]}]=$flag
+                    negiflags[${#negiflags[@]}]=$flag
+                else
+                    allflags[${#allflags[@]}]=$flag
+                    posiflags[${#posiflags[@]}]=$flag
+                fi
+            fi
+        fi
+    done
+    unset op chunkorflag junk flag
+}
+
+read_bbprofile < "$HOME/.bbprofile"
+
+flagcheck verbose && verbose=true
+flagcheck debug && debug=true
+flagcheck dumpinfo && dumpinfo=true
+
+chunkcheck () {
+          echo $BBENV | grep $1 > /dev/null && return 0 || return 1
+}
+
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+# Begone
+begone () {
+        unset $* 2>/dev/null
+        unalias $* 2>/dev/null
+        unset -f $* 2>/dev/null
+}
+
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+# prependpath and appendpath - adds entries to PATH and MANPATH if they exist
+prependpath () {
+        pathadd=$1
+        [ $(basename $pathadd) = "bin" ] && pathadd=$(dirname $pathadd)
+        if [ "$pathadd" ]
+        then
+                flagcheck debug && echo ">>> prependpath $pathadd called"
+        if [ -d $pathadd/bin ]
+        then
+            PATH=$pathadd/bin:$PATH
+        elif [ -d $pathadd ]
+        then
+            PATH=$pathadd:$PATH
+        fi
+        #[ -d $pathadd/bin ] && PATH=$pathadd/bin:$PATH
+        if [ -d "$pathadd/man" ]
+        then
+            MANPATH=$pathadd/man:$MANPATH
+        fi
+        if [ -d "$pathadd/share/man" ]
+        then
+            MANPATH=$pathadd/share/man:$MANPATH
+        fi
+        export PATH MANPATH
+        else
+                flagcheck debug && echo ">>> prependpath called without an argument"
+        fi
+        unset pathadd
+}
+appendpath () {
+    pathadd=$1
+    if [ "$pathadd" ]
+    then
+        [ $(basename $pathadd) = "bin" ] && pathadd=$(dirname $pathadd)
+        flagcheck debug && echo ">>> appendpath $pathadd called"
+        if [ -d $pathadd/bin ]
+        then
+            PATH=$PATH:$pathadd/bin
+        elif [ -d $pathadd ]
+        then
+            PATH=$PATH:$pathadd
+        fi
+        if [ -d "$pathadd/man" ]
+        then
+            MANPATH=$MANPATH:$pathadd/man
+        fi
+        if [ -d "$pathadd/share/man" ]
+        then
+            MANPATH=$MANPATH:$pathadd/share/man
+        fi
+        export PATH MANPATH
+        else
+            flagcheck debug && echo ">>> appendpath called without an argument"
+    fi
+        unset pathadd
+}
+
+
+
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+# Invoke
+invoke () {
+
+        # Check override location
+        if [ -f $chimerabaseOverride/$invokehardpath$1 ]
+        then
+                flagcheck verbose && echo "           Above chunk has called invoke $1"
+                flagcheck verbose && echo "           ! $invokehardpath$1 (local override)"
+                . $chimerabaseOverride/$invokehardpath$1  #> /dev/null
+
+        # Check main location
+        elif [ -f  $chimerabase/$invokehardpath$1 ]
+        then
+                flagcheck verbose && echo "           Above chunk has called invoke $1"
+                . $chimerabase/$invokehardpath$1 #> /dev/null
+
+        # Not in either location
+        else
+                flagcheck verbose && echo "           Above chunk has called invoke $1"
+                flagcheck verbose && echo "           !!! invoke $1 was called but no such file exists !!!"
+        fi
+}
+
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+# aliasexporter - provide alias definitions in a file that subshells can source
+aliasexporter () {
+        LOGINSHELL=true # do NOT export this, we'll use it to determine subshell status
+
+        if flagcheck aliasexport
+        then
+          #aliasfile_new_contents=$(
+             #     echo "# this is an AUTO_GENERATED file!"
+          #     echo "# DO NOT edit by hand as manual edits can and will be lost."
+          #     echo
+          #     echo "if [ ! \"\$LOGINSHELL\" ] && [ \"\$BBENV\" ]"
+          #     echo "then"
+          #     echo "     if [ -f /etc/bb/chimera/chimera ] && [ \"\$(echo \$- | grep i)\" ]"
+          #     echo "     then"
+          #     echo "          THISPROC=\$(ps -p \$\$ | awk '{print \$NF}' | tail -1)"
+          #     echo "          PARENT=\$(ps -p \$PPID | awk '{print \$NF}' | tail -1)"
+          #     echo "          if [ \"\$THISPROC\" = \"\$PARENT\" ]"
+          #     echo "          then"
+          #     echo "               echo \"+ flag/aliasexport is set\""
+          #     echo "               . /etc/bb/chimera/chimera quiet"
+          #     echo "               echo \"Chimera sourced in subshell\" && echo"
+          #     echo "          fi"
+          #     echo "     fi"
+          #     echo "fi"
+          #)
+
+          aliasfile_new_contents=$(
+                  echo "# this is an AUTO_GENERATED file!"
+               echo "# DO NOT edit by hand as manual edits can and will be lost."
+               echo
+               echo "if [ ! \"\$LOGINSHELL\" ] && [ \"\$BBENV\" ]"
+               echo "then"
+               echo "     if [ -f /etc/bb/chimera/chimera ] && [ \"\$(echo \$- | grep i)\" ]"
+               echo "     then"
+               echo "          . /etc/bb/chimera/chimera quiet"
+               echo "          echo \"+ flag/aliasexport is set, Chimera sourced in subshell\""
+               echo "     fi"
+               echo "fi"
+          )
+
+          aliasfile_old_contents=$(cat "$aliasfile" 2>/dev/null)
+          if [ "$aliasfile_new_contents" != "$aliasfile_old_contents" ]; then
+               echo "$aliasfile_new_contents" > $aliasfile.$$
+               mv $aliasfile.$$ $aliasfile
+          fi
+          unset aliasfile_old_contents
+          unset aliasfile_new_contents
+
+        elif flagcheck no aliasexport
+        then
+                rm -f $aliasfile $aliasfile.*  2>/dev/null
+
+        elif [ -f $aliasfile ]
+        then
+                echo >> $errorlog
+                echo "----------------------" >> $errorlog
+                echo "Attention: you have a $aliasfile present in your home directory" >> $errorlog
+                echo "however it may be out of date as chimera is not configured to update it" >> $errorlog
+                echo "(add \"+ flag/aliasexport\" to your .bbprofile to keep up to date" >> $errorlog
+                echo "or \"- flag/aliasexport\" to disable it." >> $errorlog
+                echo "----------------------" >> $errorlog
+                echo >> $errorlog
+        fi
+}
+
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+# pathsanity - strip dupes and nulls from PATH variables
+#              2013-11-29: most execs of external utils removed in favor of
+#                          faster in-proc ksh logic - jmahood
+pathsanity () {
+  STARTPATH=$1
+  FINALPATH=""
+
+  # split $STARTPATH on /:/, storing in $paths[@], of size $numpaths
+  # empty string & "/bb/bin" skipped with awk
+  typeset -i numpaths=0
+  for entry in $(echo "$STARTPATH" | awk -F: \
+      '{ for (i=1; i<=NF; ++i) if (length($i) > 0 && $i != "/bb/bin") print $i;}')
+  do
+    paths[$numpaths]="$entry"
+    let numpaths=$numpaths+1
+  done
+
+  # copy first path into $FINALPATH
+  [ $numpaths -gt 0 ] && FINALPATH="${paths[0]}"
+
+  # quadratic 2-pass linear search to filter dupes, but at least it's pure ksh
+  # Outer loop: for each path passed in
+  typeset -i currpath=1
+  while [ $currpath -lt $numpaths ]
+  do
+    # Inner loop: check preceding paths for any dupe
+    typeset -i jj=0
+    while [ $jj -lt $currpath ]
+    do
+      if [ ${paths[$jj]} = ${paths[$currpath]} ]
+      then
+        break # dupe found, short circuit without incrementing $jj
+      fi
+      let jj=$jj+1 # if we made it through with no dupe, this == currpath
+    done
+    if [ $jj -ge $currpath ]
+    then
+      # path at index $currpath is OK to add, not a dupe.
+      FINALPATH="${FINALPATH}:${paths[$currpath]}"
+    fi # if a dupe was found, ignore it
+    let currpath=$currpath+1
+  done
+
+  if flagcheck no bbbin
+  then
+    [ "$logstats" ] && echo "$LOGNAME - flag/bbbin " >> $logfile
+  elif ! flagcheck ultimatenull
+  then
+    # add path of last resort
+    FINALPATH="$FINALPATH:/bb/bin" # path of last resort; export PATH
+  fi
+
+  echo $FINALPATH
+  unset STARTPATH
+  #unset FINALPATH leave this for now, troubleshooting
+}
+
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+buildgroups (){
+    if [ -f /opt/bb/bin/groups ]
+    then
+          mygroups=$(/opt/bb/bin/groups)
+    elif [ -f /opt/swt/bin/groups ]
+    then
+          mygroups=$(/opt/swt/bin/groups)
+    else
+          mygroups=$(groups) # solaris' groups will list primary twice
+    fi
+    primarygroup=$(echo $mygroups | cut -d" " -f1)
+    secondarygroups=$(echo $mygroups | cut -d" " -f2-)
+    mygroups="$secondarygroups $primarygroup"
+    for mygroup in $mygroups
+    do
+         sourcestringgroups="$sourcestringgroups group/$mygroup"
+    done
+}
+
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+buildtags () {
+        mytags=$(grep -iw $HOSTNAME /bb/bin/bbcpu.lst)
+        for mytag in $mytags
+        do
+                sourcestringtags="$sourcestringtags tag/$mytag"
+        done
+}
+
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+# chimeramerge - reads user .bbprofile and adjusts chunks according to settings
+#chimeramerge=/profile
+chimeramerge () {
+    input=$*
+    outputlist=$input
+    bboverridelocation=$HOME/.bbprofile.d/
+    standardlocation=/etc/bb/chimera/
+    bbprofile=$HOME/.bbprofile
+    line=1
+
+    [ -f $errorlog ] && rm -f $errorlog > /dev/null 2>&1
+
+    while read op chunk junk
+    do # remove blank lines and comments
+            [ ! "$op" ] && let line=$line+1 && continue
+            [ "$(echo "$op"| grep \#)" ] && let line=$line+1 && continue
+            [ "$(echo "$op $chunk" | grep flag\/)" ] && continue # line appears to be a flag, move on
+            # check syntax
+            goodline=$(echo "$op $chunk" | awk '$1 ~ /^[+-]$/  && $2 ~ /[A-Za-z0-9*]\/[A-Za-z0-9*]/ {print}' 2>/dev/null)
+            if [ "$goodline" ]
+                # ----------------------------------------------------------------------------------------------
+                then # syntax ok
+                    # ------------------------------------------------------
+                    if [ $op = "+" ] # Additions (+)
+                    then
+                        if [ -f $bboverridelocation$chunk ] || [ -f $chunk ]
+                        then #chunk exists in override or standard location, add to list
+                            if [ "$( echo $outputlist | grep -w $chunk)" ]
+                            then
+                            for checkchunk in $outputlist
+                            do # chunk is present from normal order, reposition it according to bbprofile order
+                                checkchunk=$(echo $checkchunk | grep -v $chunk)
+                                newoutputlist="$newoutputlist $checkchunk"
+                            done
+                            outputlist=$newoutputlist && unset newoutputlist
+                        fi
+                            outputlist="$outputlist $chunk"
+                        else #chunk does not exist, make log entry
+                            echo "$bbprofile: line $line: no such profile: $chunk"  >> $errorlog
+                        fi
+
+                    # ------------------------------------------------------
+                    else # Subtractions (-)
+                        if [ "$chunk" = "*/*" ]
+                    then # special case remove everything
+                        outputlist=""
+                        posiflags[${#posiflags[@]}]=ultimatenull
+                                [ "$logstats" ] && echo "$LOGNAME - */* " >> $logfile
+                    fi
+                        if [ "$( echo $outputlist | grep -w $chunk)" ]
+                        then # chunk is present in final list, rebuild list and remove
+                            for checkchunk in $outputlist
+                            do
+                                checkchunk=$(echo $checkchunk | grep -v $chunk)
+                                newoutputlist="$newoutputlist $checkchunk"
+                            done
+                            outputlist=$newoutputlist && unset newoutputlist
+                        fi
+                    fi
+                # ----------------------------------------------------------------------------------------------
+                else # syntax error, log as invalid
+                    echo "$bbprofile: line $line: unrecognized line: $op $chunk $junk" >> $errorlog
+                fi
+                unset goodline
+                let line=$line+1
+        done < $bbprofile
+
+        for chunk in $outputlist
+        do
+                [ -f $bboverridelocation$chunk ] && output="$output $chunk" && continue
+                [ -f $standardlocation$chunk ] && output="$output $chunk"
+        done
+
+        echo $output
+}
+
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+#  --== Main ==--
+
+
+# hushlogin
+# for DRQS 46944613 and DRQS 47991458
+# Silence on presence of hushlogin file
+if [ -f $HOME/.hushlogin ]
+then
+     exec 8>&1
+     hushlogin="true"
+     exec 1>/dev/null
+# Silence if invoked from .bbalias
+elif [ "$1" = "quiet" ]
+then
+     exec 8>&1
+     hushsubshell="true"
+     preservedir=$PWD
+     preservepath=$PATH
+     preservempath=$MANPATH
+     preserveps1=$PS1
+     exec 1>/dev/null
+# Silence on presence of negative verbose flag
+elif flagcheck no verbose
+then
+     exec 8>&1
+     hushlogin="true"
+     exec 1>/dev/null
+# Finally, silence  on non-interactive subshells (such as for cron)
+elif [ ! "$(echo $- | grep i)" ]
+then
+     exec 8>&1
+     hushlogin="true"
+     exec 1>/dev/null
+fi
+
+echo
+
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+# New Shells
+
+# Only drop into this if a login shell is detected.
+# If $0 begins with '-', we know we are in a login shell.
+if [ -z "${0%%-*}" ]
+then
+     # Do not re-execute shell if in non-interactive mode
+     if [ -n "$cronuse" ]
+     then
+         flagclear zsh
+         flagclear bash
+         flagclear ksh93
+     fi
+
+     # check for flag/zsh
+     # ------------------------------------------------------------------------
+     if flagcheck zsh
+     then
+         # normally I don't like modifying user files, but explaining this seems to be long and painful
+         # DPKG perms will prompt users for insecure directories without this
+         if [ -f $HOME/.zshrc ] && [ "$(grep "^compinit$" $HOME/.zshrc)" ] && ! flagcheck zsecure
+         then
+             sed 's/^compinit$/compinit -u/g' $HOME/.zshrc > $HOME/.zshrc.$(hostname).$$.chimera 2>/dev/null
+             mv $HOME/.zshrc.$(hostname).$$.chimera $HOME/.zshrc
+         elif [ -f $HOME/.zshrc ] && [ "$(grep "^compinit -u$" $HOME/.zshrc)" ] && flagcheck zsecure
+         then
+             sed 's/^compinit -u$/compinit/g' $HOME/.zshrc > $HOME/.zshrc.$(hostname).$$.chimera 2>/dev/null
+             mv $HOME/.zshrc.$(hostname).$$.chimera $HOME/.zshrc
+         fi
+
+         echo " -- zsh shell requested (+ flag/zsh)  "
+         echo " !! preliminary support, don't complain but please report errors"
+         [ "$logstats" ] && echo "$LOGNAME + flag/zsh " >> $logfile
+
+         if [ -f /opt/bb/bin/zsh ] && [ "$SHELL" != "/opt/bb/bin/zsh" ]
+         then
+             if [ ! "$BASH" ]
+             then
+                 echo " -- will re-source with /opt/bb/bin/zsh"
+             fi
+             SHELL=/opt/bb/bin/zsh;export SHELL
+             CHIMERA_SHELLBOUNCE=1 exec /opt/bb/bin/zsh -l
+             # should never get here
+             echo " !! Exec of $SHELL failed! Serious problem!"
+             return
+         else
+             if flagcheck bash && [ ! "$BASH" ]
+             then
+                 echo " !! could not locate zsh in /opt/bb/bin !"
+                 echo " !! unable to use zsh, flag/bash detected will try fallback to bash"
+             elif flagcheck ksh93 && [ ! "$BASH" ]
+             then
+                 echo " !! could not locate zsh in /opt/bb/bin !"
+                 echo " !! unable to use zsh, flag/ksh93 detected will try fallback to ksh93"
+             fi
+         fi
+     fi
+
+     # check for bash flag flag/bash
+     # ------------------------------------------------------------------------
+     # skip if zsh is alredy in play
+     if flagcheck bash && [ ! "$ZSH_NAME" ]
+     then
+         echo " -- bash shell requested (+ flag/bash)  "
+         [ "$logstats" ] && echo "$LOGNAME + flag/bash " >> $logfile
+
+         newshell=
+         if [ -f /opt/bb/bin/bash ]
+         then
+             newshell=/opt/bb/bin/bash
+         elif [ -f /opt/swt/bin/bash ]
+         then
+             newshell=/opt/swt/bin/bash
+         elif  [ -f /bin/bash ]
+         then
+             newshell=/bin/bash
+         else
+             if flagcheck ksh93 && [ ! "$KSH_VERSION" ]
+             then
+                 echo " !! bash shell requested but could not locate bash either /opt/swt/bin or /bin !"
+                 echo " !! Unable to use bash as a shell here, continuing with ksh login..."
+             fi
+         fi
+
+         if [ -n "$newshell" ] && [ "$SHELL" != "$newshell" ]
+         then
+             echo " -- will re-source with ${newshell}"
+             SHELL=$newshell
+             export SHELL
+             CHIMERA_SHELLBOUNCE=1 exec "$newshell" -l
+             # should never get here...
+             echo " !! Exec of ($newshell) failed! Serious problem!"
+             return
+         fi
+
+         unset newshell
+     fi
+
+     # ksh93 - add support for /bin/ksh93 as login shell
+     # ------------------------------------------------------------------------
+     # skip if eithe zsh or bash are already in play
+     if flagcheck ksh93 && [ ! "$ZSH_NAME" ] && [ ! "$BASH" ]
+     then
+         if [ ! "$KSH_VERSION" ]
+         then
+             echo " -- ksh93 shell requested (+ flag/ksh93)  "
+             [ "$logstats" ] && echo "$LOGNAME + flag/ksh93 " >> $logfile
+             if [ -f /bin/ksh93 ]
+             then
+                 SHELL=/bin/ksh93;export SHELL
+                 echo " -- will re-source with $SHELL"
+                 CHIMERA_SHELLBOUNCE=1 exec /bin/ksh93 -l
+                 echo " !! Exec of new shell (/bin/ksh93) failed! Serious problem!"
+                 return
+             else
+                 echo " !! could not locate /bin/ksh93"
+                 echo " !! unable to use ksh93 as a shell here"
+             fi
+         fi
+     fi
+
+fi
+flagcheck bash && escape="-e" || escape=""
+# End New Shell bounce loop
+
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+[ -f $errorlog ] && rm -f $errorlog > /dev/null 2>&1
+
+buildgroups
+buildtags
+sourcestring="$sourcestringtags $sourcestringgroups"
+echo " ---- Chimera dynamic profile -- (type 'chimera' for info) -------------------"
+echo " -- Welcome to $HOSTNAME, $LOGNAME"
+echo
+
+# Straighten out path nonsense.  This will show what we are handed off by
+# ssh/rsh in this respect as sshd has some path stuff built in for scp
+# compatability.
+flagcheck debug && cat <<EOM
+>>> INITIAL PATH given to Chimera: $PATH
+>>> Resetting to: $RESETPATH for sanity purposes
+EOM
+
+HANDOFFPATH=$PATH
+PATH=$RESETPATH
+export PATH
+
+flagcheck debug && cat <<EOM
+>>> $PATH
+
+>>> + FLAGS:
+>>> ${posiflags[@]}
+
+>>> - FLAGS:
+>>> ${negiflags[@]}
+
+>>> ALL FLAGS:
+>>> ${allflags[@]}
+
+
+>>> chunks: $allchunks
+EOM
+
+flagcheck verbose && cat <<EOM
+     * Using home directory $HOME
+     * Reading $HOME/.bbprofile ...
+EOM
+
+cd $chimerabase
+
+# DRQS 44826336 TMPDIR should be universal
+TMPDIR=/tmp
+#[ -d /var/tmp ] && TMPDIR=/var/tmp
+[ -d /bb/data/tmp ] && TMPDIR=/bb/data/tmp
+export TMPDIR
+
+
+BBENV=$(chimeramerge $sourcestring 2> $errorlog); export BBENV
+
+flagcheck debug && echo && echo ">>> BBENV:" && echo ">>> $BBENV" && echo
+if flagcheck verbose
+then
+        [ "$BBENV" ]  && echo "     * Sourcing the following profile chunks ..."
+        [ ! "$BBENV" ] && echo "     * No profile chunks to process based on .bbprofile settings"
+fi
+
+
+for sourcefile in $BBENV
+do
+        # moving individual chunk invokation messages back in house.
+        CHUNK_CHECKPOINT=$sourcefile
+        flagcheck verbose && echo "        + $sourcefile"
+        if [ -f $chimerabaseOverride/$sourcefile ]
+        then
+                flagcheck verbose && echo "        ! $sourcefile (local override)"
+                . $chimerabaseOverride/$sourcefile  #> /dev/null
+                continue
+
+        elif [ -f  $chimerabase/$sourcefile ]
+        then
+                . $chimerabase/$sourcefile #> /dev/null
+        else
+                echo "Unhandled exception in chimera's BBENV list"
+        echo "------------------------------" >> $errorlog
+                echo "Unhandled exception in chimera's BBENV list while processing $sourcefile" >> $errorlog
+        echo "Full BBENV:" >> $errorlog
+        echo "$BBENV" >> $errorlog
+        fi
+    flagcheck debug && echo ">>> $PATH"
+done
+#echo
+
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+# User quality of life tools
+alias chimera='/etc/bb/chimera/chimera-tool'
+# functions are exportable?
+#function chimerafunc { /etc/bb/chimera/chimera-tool ;};export chimerafuic
+
+flagcheck verbose && /etc/bb/chimera/chimera-tool
+
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+# display MOTD if it exists.  Why usurp this when we can just have our own?
+# that way it's easier to distribute to bulk machines.  We'll put an undocumented
+# flag on it to disable if needed, but prefer chimera's motd over /etc/motd
+# if it exists.
+# - flag/chimera_motd = skip chimera.motd, display /etc/motd instead
+# - flag/motd = do not display /etc/motd regardless of chimera.motd state
+# + flag/motd = display /etc/motd even if chimera.motd exists
+if flagcheck no chimera_motd
+then
+        if ! flagcheck no motd
+        then
+                echo #[ -r /etc/motd ] && cat -s /etc/motd && echo
+        fi
+elif  [ -r $chimerabase/chimera.motd ]
+then
+     execute=$(head -1 $chimerabase/chimera.motd | grep "sh$" | grep "^#")
+        if [ "$execute" ]
+     then
+          $chimerabase/chimera.motd
+          echo
+     else
+          cat $chimerabase/chimera.motd && echo
+     fi
+        #flagcheck motd && [ -r /etc/motd ] && cat /etc/motd && ehco
+else
+        if ! flagcheck no motd
+        then
+                echo #[ -r /etc/motd ] && cat /etc/motd && echo
+        fi
+fi
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+# this is included here to return the user to their home directory should they
+# choose to exclude all inheritence from their setup (- */* in .bbprofile)
+# also DRQS 9212279 : ... just a cd, really.
+cd
+
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+# set ENV variables.  ksh executes the value of ENV by default on login, bash
+# only on non-login shells ad subshells.  This is the default behaviour.
+# http://www.gnu.org/software/bash/manual/html_node/Bash-Startup-Files.html
+flagcheck bashenv && [ -f $HOME/.bashrc ] && BASH_ENV=$HOME/.bashrc && export BASH_ENV
+[ -f $HOME/.kshrc ] && ENV=$HOME/.kshrc && export ENV
+
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+# make sure we hand off a sane path, no dupes and no null entries
+
+if flagcheck no bbbin
+then
+        [ "$logstats" ] && echo "$LOGNAME - flag/bbbin " >> $logfile
+else
+    # add path of last resort
+    PATH=$PATH:/bb/bin # path of last resort; export PATH
+fi
+
+if flagcheck debug
+then
+    echo ">>> pathsanity PATH:"
+    echo ">>> $PATH"
+    time PATH=$(pathsanity $PATH)
+    echo ">>> $PATH"
+    echo
+    echo ">>> pathsanity MANPATH:"
+    echo ">>> $MANPATH"
+    time MANPATH=$(pathsanity $MANPATH)
+    echo ">>> $MANPATH"
+    echo
+    echo ">>> pathsanity finished"
+    echo
+elif [ ! "$hushsubshell" ]
+then
+    PATH=$(pathsanity $PATH)
+    FINALPATH=$PATH;export FINALPATH
+    MANPATH=$(pathsanity $MANPATH)
+    MANPATH=${MANPATH%:/bb/bin} # strip /bb/bin from here... quickfix
+    MANPATH=${MANPATH%:/bb/bin/} # strip /bb/bin/ from here... quickfix
+fi
+
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+# Cleanup.
+# This is supposed to be a clean environment effort, to that end unset anyting
+# that is set in this script so that it doesn't pollute the end environment.
+if [ -s $errorlog ]
+then
+        flagcheck debug && echo ">>> Errors were generated!!!"
+    echo " !! Chimera generated output: please review $errorlog"
+    #echo
+else
+        flagcheck debug && echo ">>> Error log is empty, removing"
+    rm -f $errorlog
+fi
+
+flagcheck alwayshome && alwayshome="True"
+
+begone chimeramerge
+begone prependpath
+begone appendpath
+begone buildgroups
+begone buildtags
+begone invoke
+begone pathsanity
+begone chunkcheck
+unset -f begone 2>/dev/null # DRQS 81237568
+aliasexporter
+
+#wipe the slate clean of everything remaining, even us
+unset -f flagcheck
+unset -f aliasexporter
+unset -f read_bbprofile
+unset -f check_for_flag
+
+unset debug
+unset verbose
+unset errorlog
+unset chimerabaseOverride
+unset invokehardpath
+unset mygroups
+unset mygroup
+unset sourcestringgroups
+unset sourcestringtags
+unset mytags
+unset mytag
+unset sourcestring
+unset sourcefile
+unset whatwesource
+unset showallmsg
+unset allflags
+unset posiflags
+unset negiflags
+unset entry
+unset aliasfile
+unset ARCHCODE
+unset CHUNK_CHECKPOINT
+unset devengmaillist
+
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+# Dumpinfo - Added to assist in troubleshooting efforts.  User can add
+# + flag/dumpinfo and spawn a new shell.  Files and info will be collected and
+# an email will be sent with location of archive.
+if [ "$dumpinfo" ]
+then
+    dumpfiles=".bbprofile* .bbalias $LOGNAME.$$.set $LOGNAME.$$.alias $LOGNAME.$$.function .profile .kshrc .bashrc"
+    dumpfile=/home/testadmn/LOGS/chimera/$LOGNAME.$(date  +%Y%m%d).tar
+
+    cd
+    echo ">>> preparing dumpinfo"
+
+    set > $LOGNAME.$$.set 2>/dev/null
+    alias > $LOGNAME.$$.alias 2>/dev/null
+    typeset -f > $LOGNAME.$$.function 2>/dev/null
+
+    [ -f $dumpfile ] && rm -f $dumpfile > /dev/null 2>&1
+    tar cvf $dumpfile $dumpfiles > /dev/null 2>&1
+
+    echo $dumpfile | mailx -s "Chimera information dump for $LOGNAME" $dumpnotify
+
+    echo ">>> done"
+    echo ">>> commenting flag/dumpinfo from $HOME/.bbprofile"
+    sed 's/\+ flag\/dumpinfo/\#\+ flag\/dumpinfo/g' $HOME/.bbprofile > $HOME/.bbprofile.$$.chimera 2>/dev/null
+    mv $HOME/.bbprofile.$$.chimera $HOME/.bbprofile 2>/dev/null
+    rm -f $LOGNAME.$$.set $LOGNAME.$$.alias $LOGNAME.$$.function 2> /dev/null
+fi
+unset dumpfile dumpfiles dumpnotify dumpinfo logfile logstats name
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+# various alert messages that are programically defined (not chimera.motd)
+if [ "$(ls /opt/bb/bin 2>/dev/null)" ] && [ ! "$(echo $BBENV | grep contrib/optbb)" ]
+then
+     if [ ! "$(echo $BBENV | grep contrib/dpkg)" ]
+     then
+          bold="\033[1;37m\033[40m" # 13
+          red="\033[1;31m\033[40m"  # 14
+          norm="\033[00m"           # 4
+          echo $escape "$bold"\!\!"$red ATTENTION:$bold This host has$red /opt/bb/bin$bold binaries available                    ";\
+          echo $escape "$bold"\!\!" you are encouraged to try putting \"+ contrib/optbb\" in your ~/.bbprofile   ";\
+          echo $escape "$bold"\!\!" if you have not already done so. We will be transitioning away from older  ";\
+          echo $escape "$bold"\!\!" /opt/swt/bin binaries in the near future, some commands may have different ";\
+          echo $escape "$bold"\!\!" options and behaviors, by adopting the preffered newer binaries in advance ";\
+          echo $escape "$bold"\!\!" the transition will be smoother (hopefully)                                $norm"
+          echo
+          unset escape bold red norm
+     fi
+fi
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+# orangeburg migration boilerplate
+#bold="\033[1;37m\033[40m"
+#red="\033[1;31m\033[40m"
+#norm="\033[00m"
+##echo $escape "$bold"\!\!"$red ATTENTION:$bold                                                                                   ";\
+#echo $escape "$bold"\!\!"$red ATTENTION:$bold                                                                   ";\
+#echo $escape "$bold"\!\!" Please be aware that we will be doing a migration of some development      ";\
+#echo $escape "$bold"\!\!" NAS volumes this$red Saturday, December 12$bold. This will involve a reboot of        ";\
+#echo $escape "$bold"\!\!" approximately 110 development machines.                                    ";\
+#echo $escape "$bold"\!\!" Please refer to the following Team page for more information:              ";\
+#echo $escape "$bold"\!\!" {TEAM RDCOO:OB DEV FILER CUT-OVER PRE-TEST WEEKEND #2<GO>}                 ";\
+#echo $escape "$bold"\!\!" Please note that the Dev volumes and machines mentioned in the Team        ";\
+##echo $escape "$bold"\!\!" page will not be available during this time.                               ";\
+#echo $escape "$bold"\!\!" Any questions can be directed to Peter Walsh of R&D COO Office.            ";\
+#echo $escape "$bold"\!\!" {MSG 11202434<GO>}                                                         $norm"
+#echo
+#unset escape bold red norm
+#
+unset chimerabase
+[ "$OSwarning" ] && echo " " $OSwarning && echo && unset OSwarning # $OSwarning set in tag/sparc|ibm|linux
+
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+#echo " -----------------------------------------------------------------------------"
+if [ -e ~/.profile ] || [ -e ~/.bash_profile ]
+then
+     echo " ---- Chimera finished, handing off to local profile -------------------------"
+else
+     echo " ---- Chimera finished, all done ---------------------------------------------"
+fi
+
+if [ "$hushlogin" ]
+then
+     exec 1>&2
+     echo "Chimera finished"
+     unset hushlogin
+elif [ "$hushsubshell" ]
+then
+     exec 1>&2
+     [ ! "$alwayshome" ] && cd $preservedir
+     PATH=$preservepath
+     MANPATH=$preservempath
+     PS1=$preserveps1
+     unset hushsubshell preservedir alwayshome preservepath preserveps1
+else
+     echo
+fi
+
