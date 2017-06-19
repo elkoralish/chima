@@ -458,7 +458,7 @@ chimeramerge () {
     do # remove blank lines and comments
             [ ! "$op" ] && let line=$line+1 && continue
             [ "$(echo "$op"| grep \#)" ] && let line=$line+1 && continue
-            [ "$(echo "$op $chunk" | grep flag\/)" ] && continue # line appears to be a flag, move on
+            [ "$(echo "$op $chunk" | grep flag\/)" ] && let line=$line+1 && continue # line appears to be a flag, move on
             # check syntax
             goodline=$(echo "$op $chunk" | awk '$1 ~ /^[+-]$/  && $2 ~ /[A-Za-z0-9*]\/[A-Za-z0-9*]/ {print}' 2>/dev/null)
             if [ "$goodline" ]
